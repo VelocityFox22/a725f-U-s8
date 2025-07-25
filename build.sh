@@ -4,7 +4,7 @@
 # Toolchains
 AOSP_REPO="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/master"
 AOSP_ARCHIVE="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master"
-SD_REPO="https://github.com/ThankYouMario/proprietary_vendor_qcom_sdclang"
+SD_REPO="https://gitlab.com/ZyCromerZ/sdclang-16.1.0.1.git"
 SD_BRANCH="14"
 PC_REPO="https://github.com/kdrag0n/proton-clang"
 LZ_REPO="https://gitlab.com/Jprimero15/lolz_clang.git"
@@ -84,6 +84,8 @@ DO_BASHUP=0
 DO_FLTO=0
 DO_REGEN=0
 LOG_UPLOAD=1
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""
 
 ## Colors
 RED='\033[0;31m'
@@ -108,16 +110,29 @@ show_header() {
     echo
 }
 
-show_menu() {
+show_main_menu() {
     show_header
     echo -e "${GREEN}1. Build Kernel${NC}"
-    echo -e "${GREEN}2. Clean Build${NC}"
-    echo -e "${GREEN}3. Toolchain Settings${NC}"
-    echo -e "${GREEN}4. Build Options${NC}"
-    echo -e "${GREEN}5. Upload Options${NC}"
-    echo -e "${RED}6. Exit${NC}"
+    echo -e "${GREEN}2. Generate Menuconfig${NC}"
+    echo -e "${GREEN}3. Clean Build${NC}"
+    echo -e "${RED}4. Exit${NC}"
     echo
-    read -p "Please enter your choice [1-6]: " choice
+    read -p "Please enter your choice [1-4]: " choice
+}
+
+show_build_menu() {
+    show_header
+    echo -e "${GREEN}1. Select Toolchain${NC}"
+    echo -e "${GREEN}2. Set Telegram Credentials${NC}"
+    echo -e "${GREEN}3. Toggle KernelSU Support${NC}"
+    echo -e "${GREEN}4. Toggle Full LTO${NC}"
+    echo -e "${GREEN}5. Toggle Clean Build${NC}"
+    echo -e "${GREEN}6. Toggle Build Type${NC}"
+    echo -e "${GREEN}7. Toggle Upload Options${NC}"
+    echo -e "${GREEN}8. Start Build${NC}"
+    echo -e "${RED}9. Back to Main Menu${NC}"
+    echo
+    read -p "Please select option [1-9]: " build_choice
 }
 
 show_toolchain_menu() {
@@ -133,31 +148,12 @@ show_toolchain_menu() {
     echo -e "${GREEN}7. ZyC Clang${NC}"
     echo -e "${GREEN}8. RvClang${NC}"
     echo -e "${GREEN}9. Custom Toolchain${NC}"
-    echo -e "${RED}10. Back to Main Menu${NC}"
+    echo -e "${RED}10. Back to Build Menu${NC}"
     echo
     read -p "Please select toolchain [1-10]: " toolchain_choice
 }
 
-show_build_options() {
-    show_header
-    echo -e "${GREEN}Current Build Options:${NC}"
-    echo -e " - KernelSU: ${YELLOW}$([ "$DO_KSU" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
-    echo -e " - Full LTO: ${YELLOW}$([ "$DO_FLTO" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
-    echo -e " - Menuconfig: ${YELLOW}$([ "$DO_MENUCONFIG" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
-    echo -e " - Regenerate Config: ${YELLOW}$([ "$DO_REGEN" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
-    echo -e " - Build Type: ${YELLOW}$BUILD_TYPE${NC}"
-    echo
-    echo -e "${GREEN}1. Toggle KernelSU${NC}"
-    echo -e "${GREEN}2. Toggle Full LTO${NC}"
-    echo -e "${GREEN}3. Toggle Menuconfig${NC}"
-    echo -e "${GREEN}4. Toggle Config Regeneration${NC}"
-    echo -e "${GREEN}5. Toggle Build Type${NC}"
-    echo -e "${RED}6. Back to Main Menu${NC}"
-    echo
-    read -p "Please select option [1-6]: " build_opt_choice
-}
-
-show_upload_options() {
+show_upload_menu() {
     show_header
     echo -e "${GREEN}Current Upload Options:${NC}"
     echo -e " - Telegram Upload: ${YELLOW}$([ "$DO_TG" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
@@ -167,9 +163,9 @@ show_upload_options() {
     echo -e "${GREEN}1. Toggle Telegram Upload${NC}"
     echo -e "${GREEN}2. Toggle Bashupload${NC}"
     echo -e "${GREEN}3. Toggle Log Upload${NC}"
-    echo -e "${RED}4. Back to Main Menu${NC}"
+    echo -e "${RED}4. Back to Build Menu${NC}"
     echo
-    read -p "Please select option [1-4]: " upload_opt_choice
+    read -p "Please select option [1-4]: " upload_choice
 }
 
 install_deps_deb() {
@@ -570,6 +566,11 @@ upload() {
     fi
 
     if [[ "$DO_TG" == "1" ]]; then
+        if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo -e "\n${RED}ERROR: Telegram credentials not set!${NC}"
+            return
+        fi
+        
         echo -e "\n${YELLOW}INFO: Uploading to Telegram...${NC}\n"
         
         # Prepare caption
@@ -614,104 +615,142 @@ clean_tmp() {
     rm -f "$OUT_DTBO"
 }
 
+generate_menuconfig() {
+    get_toolchain "$CLANG_TYPE"
+    prep_toolchain "$CLANG_TYPE"
+    prep_build
+    
+    mkdir -p out
+    make O=out ARCH=arm64 "$DEFCONFIG" $([[ "$DO_KSU" == "1" ]] && echo "vendor/ksu.config")
+    make O=out menuconfig
+}
+
 ## Main Program
 install_deps_deb
 
 while true; do
-    show_menu
+    show_main_menu
     case $choice in
         1) # Build Kernel
-            echo -e "\n${GREEN}Starting build process...${NC}"
-            
-            # Get toolchain
-            get_toolchain "$CLANG_TYPE"
-            prep_toolchain "$CLANG_TYPE"
-            
-            # Prepare build
-            prep_build
-            
-            # Clean if needed
-            if [[ "$DO_CLEAN" == "1" ]]; then
-                clean_build
-            fi
-            
-            # Build kernel
-            build_kernel
-            post_build
-            
-            # Upload if needed
-            if [[ "$DO_TG" == "1" || "$DO_BASHUP" == "1" ]]; then
-                upload
-            fi
-            
-            # Clean temp files
-            clean_tmp
-            
-            echo -e "\n${GREEN}Build process completed!${NC}"
-            read -p "Press any key to continue..." -n1 -s
-            ;;
-        2) # Clean Build
-            echo -e "\n${YELLOW}Cleaning build...${NC}"
-            clean_build
-            echo -e "${GREEN}Clean completed!${NC}"
-            read -p "Press any key to continue..." -n1 -s
-            ;;
-        3) # Toolchain Settings
             while true; do
-                show_toolchain_menu
-                case $toolchain_choice in
-                    1) CLANG_TYPE="aosp" ;;
-                    2) CLANG_TYPE="sdclang" ;;
-                    3) CLANG_TYPE="proton" ;;
-                    4) CLANG_TYPE="rm69" ;;
-                    5) CLANG_TYPE="lolz" ;;
-                    6) CLANG_TYPE="greenforce" ;;
-                    7) CLANG_TYPE="zyc" ;;
-                    8) CLANG_TYPE="rv" ;;
-                    9) 
-                        read -p "Enter path to custom toolchain: " CUST_DIR
-                        CLANG_TYPE="custom" 
+                show_build_menu
+                case $build_choice in
+                    1) # Select Toolchain
+                        while true; do
+                            show_toolchain_menu
+                            case $toolchain_choice in
+                                1) CLANG_TYPE="aosp" ;;
+                                2) CLANG_TYPE="sdclang" ;;
+                                3) CLANG_TYPE="proton" ;;
+                                4) CLANG_TYPE="rm69" ;;
+                                5) CLANG_TYPE="lolz" ;;
+                                6) CLANG_TYPE="greenforce" ;;
+                                7) CLANG_TYPE="zyc" ;;
+                                8) CLANG_TYPE="rv" ;;
+                                9) 
+                                    read -p "Enter path to custom toolchain: " CUST_DIR
+                                    CLANG_TYPE="custom" 
+                                    ;;
+                                10) break ;;
+                                *) echo -e "${RED}Invalid option!${NC}" ;;
+                            esac
+                            echo -e "${GREEN}Toolchain set to: ${YELLOW}$CLANG_TYPE${NC}"
+                            sleep 1
+                        done
                         ;;
-                    10) break ;;
-                    *) echo -e "${RED}Invalid option!${NC}" ;;
-                esac
-                echo -e "${GREEN}Toolchain set to: ${YELLOW}$CLANG_TYPE${NC}"
-                sleep 1
-            done
-            ;;
-        4) # Build Options
-            while true; do
-                show_build_options
-                case $build_opt_choice in
-                    1) DO_KSU=$((1-DO_KSU)) ;;
-                    2) DO_FLTO=$((1-DO_FLTO)) ;;
-                    3) DO_MENUCONFIG=$((1-DO_MENUCONFIG)) ;;
-                    4) DO_REGEN=$((1-DO_REGEN)) ;;
-                    5) 
+                    2) # Set Telegram Credentials
+                        read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
+                        read -p "Enter Telegram Chat ID: " TELEGRAM_CHAT_ID
+                        echo -e "${GREEN}Telegram credentials set!${NC}"
+                        sleep 1
+                        ;;
+                    3) # Toggle KernelSU
+                        DO_KSU=$((1-DO_KSU))
+                        echo -e "${GREEN}KernelSU Support: ${YELLOW}$([ "$DO_KSU" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
+                        sleep 1
+                        ;;
+                    4) # Toggle Full LTO
+                        DO_FLTO=$((1-DO_FLTO))
+                        echo -e "${GREEN}Full LTO: ${YELLOW}$([ "$DO_FLTO" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
+                        sleep 1
+                        ;;
+                    5) # Toggle Clean Build
+                        DO_CLEAN=$((1-DO_CLEAN))
+                        echo -e "${GREEN}Clean Build: ${YELLOW}$([ "$DO_CLEAN" -eq 1 ] && echo "Enabled" || echo "Disabled")${NC}"
+                        sleep 1
+                        ;;
+                    6) # Toggle Build Type
                         if [[ "$BUILD_TYPE" == "Testing" ]]; then
                             BUILD_TYPE="Release"
                         else
                             BUILD_TYPE="Testing"
                         fi
+                        echo -e "${GREEN}Build Type: ${YELLOW}$BUILD_TYPE${NC}"
+                        sleep 1
                         ;;
-                    6) break ;;
-                    *) echo -e "${RED}Invalid option!${NC}" ;;
+                    7) # Toggle Upload Options
+                        while true; do
+                            show_upload_menu
+                            case $upload_choice in
+                                1) DO_TG=$((1-DO_TG)) ;;
+                                2) DO_BASHUP=$((1-DO_BASHUP)) ;;
+                                3) LOG_UPLOAD=$((1-LOG_UPLOAD)) ;;
+                                4) break ;;
+                                *) echo -e "${RED}Invalid option!${NC}" ;;
+                            esac
+                        done
+                        ;;
+                    8) # Start Build
+                        echo -e "\n${GREEN}Starting build process...${NC}"
+                        
+                        # Get toolchain
+                        get_toolchain "$CLANG_TYPE"
+                        prep_toolchain "$CLANG_TYPE"
+                        
+                        # Prepare build
+                        prep_build
+                        
+                        # Clean if needed
+                        if [[ "$DO_CLEAN" == "1" ]]; then
+                            clean_build
+                        fi
+                        
+                        # Build kernel
+                        build_kernel
+                        post_build
+                        
+                        # Upload if needed
+                        if [[ "$DO_TG" == "1" || "$DO_BASHUP" == "1" ]]; then
+                            upload
+                        fi
+                        
+                        # Clean temp files
+                        clean_tmp
+                        
+                        echo -e "\n${GREEN}Build process completed!${NC}"
+                        read -p "Press any key to continue..." -n1 -s
+                        break
+                        ;;
+                    9) # Back to Main Menu
+                        break
+                        ;;
+                    *) echo -e "\n${RED}Invalid option! Please try again.${NC}" ;;
                 esac
             done
             ;;
-        5) # Upload Options
-            while true; do
-                show_upload_options
-                case $upload_opt_choice in
-                    1) DO_TG=$((1-DO_TG)) ;;
-                    2) DO_BASHUP=$((1-DO_BASHUP)) ;;
-                    3) LOG_UPLOAD=$((1-LOG_UPLOAD)) ;;
-                    4) break ;;
-                    *) echo -e "${RED}Invalid option!${NC}" ;;
-                esac
-            done
+        2) # Generate Menuconfig
+            echo -e "\n${GREEN}Generating menuconfig...${NC}"
+            generate_menuconfig
+            echo -e "${GREEN}Menuconfig completed!${NC}"
+            read -p "Press any key to continue..." -n1 -s
             ;;
-        6) # Exit
+        3) # Clean Build
+            echo -e "\n${YELLOW}Cleaning build...${NC}"
+            clean_build
+            echo -e "${GREEN}Clean completed!${NC}"
+            read -p "Press any key to continue..." -n1 -s
+            ;;
+        4) # Exit
             echo -e "\n${GREEN}Exiting... Goodbye!${NC}"
             exit 0
             ;;
